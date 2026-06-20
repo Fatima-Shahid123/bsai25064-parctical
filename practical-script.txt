@@ -1,0 +1,789 @@
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+public class BeakerScripts : MonoBehaviour
+{
+    public enum LiquidType
+    {
+        Empty, Water, Ethanol, Oil,
+        MixedWaterEthanol,
+        UnstirredWaterOil, SettledWaterOil
+    }
+
+    private Camera mainCam;
+    private Rigidbody rb;
+    private bool isDragging = false;
+    private Vector3 dragOffset;
+    private float planeZ;
+    private float tableY = 1.084f;
+
+    [Header("Setup Configurations")]
+    public float tiltSpeed = 120f;
+    private float currentTilt = 0f;
+    public Transform liquidMesh;
+    public Transform oilLayerMesh;
+    public float maxLiquidYScale = 0.5f; // Initialized directly to 0.5 for realistic fluid volume height
+    public LiquidType currentContents = LiquidType.Empty;
+
+    [Range(0f, 1f)]
+    public float currentFillAmount = 0.0f; // Target empty beakers will read exactly 0
+    public float transferSpeed = 0.5f;
+    private float stirProgress = 0f;
+    private bool isStirredAndSettled = false;
+    public float pourDistanceRange = 3.0f;
+
+    private Color32 colorWater =
+        new Color32(212, 241, 249, 50); // Balanced faint blue alpha tint
+    private Color32 colorEthanol =
+        new Color32(227, 240, 250, 40);
+    private Color32 colorOil =
+        new Color32(235, 177, 26, 160); // Golden semi-transparent amber
+    private Color32 colorMixedClear =
+        new Color32(220, 245, 253, 45);
+    private Color32 colorCloudyMess =
+        new Color32(225, 210, 140, 150);
+    void Start()
+    {
+        mainCam = Camera.main;
+        rb = GetComponent<Rigidbody>();
+        if (rb != null) rb.isKinematic = true;
+        transform.rotation = Quaternion.identity;
+    }
+
+    void OnMouseDown()
+    {
+        if (mainCam == null || Mouse.current == null) return;
+        planeZ = transform.position.z;
+        Vector2 mPos = Mouse.current.position.ReadValue();
+        Ray ray = mainCam.ScreenPointToRay(mPos);
+        float d = (planeZ - ray.origin.z) / ray.direction.z;
+        dragOffset = transform.position - ray.GetPoint(d);
+        isDragging = true;
+        if (rb != null) rb.isKinematic = true;
+
+        RaycastHit[] hits =
+            Physics.RaycastAll(transform.position, Vector3.down, 10f);
+        foreach (RaycastHit hit in hits)
+        {
+            if (hit.collider.gameObject != this.gameObject &&
+                hit.collider.GetComponentInParent<BeakerScripts>() == null)
+            {
+                tableY = hit.point.y;
+                break;
+            }
+        }
+    }
+
+    void OnMouseUp()
+    {
+        isDragging = false;
+        if (rb != null)
+        {
+            rb.isKinematic = true;
+            rb.useGravity = false;
+        }
+        transform.position =
+            new Vector3(transform.position.x, tableY, transform.position.z);
+        currentTilt = 0f;
+        transform.rotation = Quaternion.identity;
+    }
+    void Update()
+    {
+        if (Keyboard.current == null || Mouse.current == null) return;
+
+        if (isDragging)
+        {
+            Vector2 mPos = Mouse.current.position.ReadValue();
+            Ray ray = mainCam.ScreenPointToRay(mPos);
+            float rDist = (planeZ - ray.origin.z) / ray.direction.z;
+            Vector3 targetPos = ray.GetPoint(rDist) + dragOffset;
+            targetPos.z = planeZ;
+            if (targetPos.y < tableY) targetPos.y = tableY;
+            transform.position = targetPos;
+
+            if (Keyboard.current.aKey.isPressed)
+                currentTilt += tiltSpeed * Time.deltaTime;
+            if (Keyboard.current.dKey.isPressed)
+                currentTilt -= tiltSpeed * Time.deltaTime;
+
+            bool canStir = (currentContents == LiquidType.UnstirredWaterOil ||
+                            currentContents == LiquidType.MixedWaterEthanol);
+            if (Keyboard.current.sKey.isPressed && canStir)
+            {
+                stirProgress =
+                    Mathf.Min(stirProgress + Time.deltaTime * 0.5f, 1f);
+                if (stirProgress >= 1f) isStirredAndSettled = true;
+            }
+            transform.rotation = Quaternion.Euler(0f, 0f, currentTilt);
+
+            // AUTOMATIC FORGIVING POUR LOGIC
+            bool isTilted = Mathf.Abs(currentTilt) >= 20f;
+            bool hasFluid = currentFillAmount > 0f;
+            bool notEmpty = currentContents != LiquidType.Empty;
+
+            if (isTilted && hasFluid && notEmpty)
+            {
+                BeakerScripts[] all = Object.FindObjectsOfType<BeakerScripts>();
+                BeakerScripts bestTarget = null;
+                float closestDist = float.MaxValue;
+
+                foreach (BeakerScripts receiver in all)
+                {
+                    // RECEIVING CAPACITY CRITERIA: Explicitly allows filling all the way up to 1.0 full
+                    if (receiver == this || receiver.currentFillAmount >= 1.0f)
+                        continue;
+
+                    float spaceDist = Vector3.Distance(transform.position, receiver.transform.position);
+                    if (spaceDist < closestDist)
+                    {
+                        closestDist = spaceDist;
+                        bestTarget = receiver;
+                    }
+                }
+
+                if (bestTarget != null && closestDist <= pourDistanceRange)
+                {
+                    float amt = transferSpeed * Time.deltaTime;
+                    currentFillAmount = Mathf.Max(currentFillAmount - amt, 0f);
+                    bestTarget.currentFillAmount = Mathf.Min(bestTarget.currentFillAmount + amt, 1f);
+
+                    // Chemistry Mix Logic
+                    if (bestTarget.currentContents == LiquidType.Empty)
+                    {
+                        bestTarget.currentContents = currentContents;
+                    }
+                    else if (bestTarget.currentContents == LiquidType.Water && currentContents == LiquidType.Ethanol)
+                    {
+                        bestTarget.currentContents = LiquidType.MixedWaterEthanol;
+                    }
+                    else if (bestTarget.currentContents == LiquidType.Ethanol && currentContents == LiquidType.Water)
+                    {
+                        bestTarget.currentContents = LiquidType.MixedWaterEthanol;
+                    }
+                    else if (bestTarget.currentContents == LiquidType.Water && currentContents == LiquidType.Oil)
+                    {
+                        if (!bestTarget.isStirredAndSettled) bestTarget.currentContents = LiquidType.UnstirredWaterOil;
+                    }
+                    else if (bestTarget.currentContents == LiquidType.Oil && currentContents == LiquidType.Water)
+                    {
+                        if (!bestTarget.isStirredAndSettled) bestTarget.currentContents = LiquidType.UnstirredWaterOil;
+                    }
+
+                    if (currentFillAmount <= 0f) currentContents = LiquidType.Empty;
+                }
+            }
+        }
+        else
+        {
+            currentTilt = 0f;
+            transform.rotation = Quaternion.identity;
+        }
+        if (liquidMesh != null)
+        {
+            liquidMesh.localPosition = Vector3.zero;
+            liquidMesh.localRotation = Quaternion.identity;
+            if (oilLayerMesh != null)
+            {
+                oilLayerMesh.localRotation = Quaternion.identity;
+                oilLayerMesh.gameObject.SetActive(false);
+            }
+
+            if (currentFillAmount <= 0f || currentContents == LiquidType.Empty)
+            {
+                liquidMesh.gameObject.SetActive(false);
+            }
+            else
+            {
+                liquidMesh.gameObject.SetActive(true);
+                Renderer r = liquidMesh.GetComponent<Renderer>();
+                Material mat = r.material;
+
+                // FORCE THE STANDARD SHADER TO ALLOW TRANSPARENCY RUNTIME MODE
+                mat.SetFloat("_Mode", 3);
+                mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                mat.SetInt("_ZWrite", 0);
+                mat.DisableKeyword("_ALPHATEST_ON");
+                mat.EnableKeyword("_ALPHABLEND_ON");
+                mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                mat.renderQueue = 3000;
+
+                liquidMesh.localScale =
+                    new Vector3(1f, currentFillAmount * maxLiquidYScale, 1f);
+
+                if (currentContents == LiquidType.Water)
+                    mat.color = colorWater;
+                else if (currentContents == LiquidType.Ethanol)
+                    mat.color = colorEthanol;
+                else if (currentContents == LiquidType.Oil)
+                    mat.color = colorOil;
+                else if (currentContents == LiquidType.MixedWaterEthanol)
+                    mat.color = Color.Lerp(colorWater, colorMixedClear, stirProgress);
+                else if (currentContents == LiquidType.UnstirredWaterOil)
+                    mat.color = Color.Lerp(colorOil, colorCloudyMess, stirProgress);
+                else if (currentContents == LiquidType.SettledWaterOil || isStirredAndSettled)
+                {
+                    mat.color = colorWater;
+                    liquidMesh.localScale =
+                        new Vector3(1f, (currentFillAmount * maxLiquidYScale) * 0.5f, 1f);
+                    if (oilLayerMesh != null)
+                    {
+                        oilLayerMesh.gameObject.SetActive(true);
+                        Renderer oRend = oilLayerMesh.GetComponent<Renderer>();
+                        if (oRend != null)
+                        {
+                            Material oMat = oRend.material;
+
+                            // FORCE OIL SHADER TO ALLOW TRANSPARENCY AS WELL
+                            oMat.SetFloat("_Mode", 3);
+                            oMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                            oMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                            oMat.SetInt("_ZWrite", 0);
+                            oMat.renderQueue = 3000;
+                            oMat.color = colorOil;
+                        }
+                        oilLayerMesh.localScale =
+                            new Vector3(1f, (currentFillAmount * maxLiquidYScale) * 0.5f, 1f);
+                        oilLayerMesh.localPosition =
+                            new Vector3(0f, liquidMesh.localScale.y, 0f);
+                    }
+                }
+            }
+        }
+    }
+
+    private Vector3 GetPreciseMouseWorldPos()
+    {
+        if (mainCam == null || Mouse.current == null) return Vector3.zero;
+        Vector2 mousePos = Mouse.current.position.ReadValue();
+        Ray ray = mainCam.ScreenPointToRay(mousePos);
+        float rayDistance = (planeZ - ray.origin.z) / ray.direction.z;
+        return ray.GetPoint(rayDistance);
+    }
+}
+
+
+//the above script works till mixing 
+
+//using UnityEngine;
+//using UnityEngine.InputSystem;
+
+//using UnityEngine;
+//using UnityEngine.InputSystem;
+
+//public class BeakerScripts : MonoBehaviour
+//{
+//    public enum LiquidType
+//    {
+//        Empty, Water, Ethanol, Oil,
+//        MixedWaterEthanol,
+//        UnstirredWaterOil, SettledWaterOil
+//    }
+
+//    private Camera mainCam;
+//    private Rigidbody rb;
+//    private bool isDragging = false;
+//    private Vector3 dragOffset;
+//    private float planeZ;
+//    private float tableY = 1.084f;
+
+//    [Header("Setup Configurations")]
+//    public float tiltSpeed = 120f;
+//    private float currentTilt = 0f;
+//    public Transform liquidMesh;
+//    public Transform oilLayerMesh;
+//    public float maxLiquidYScale = 0.5f;
+//    public LiquidType currentContents = LiquidType.Empty;
+
+//    [Range(0f, 1f)]
+//    public float currentFillAmount = 0.0f;
+//    public float transferSpeed = 0.5f;
+//    private float stirProgress = 0f;
+//    private bool isStirredAndSettled = false;
+//    public float pourDistanceRange = 3.0f;
+
+//    [Header("CRASH-PROOF MATERIALS")]
+//    [Tooltip("Drag your transparent blue Water material asset file here")]
+//    public Material waterMaterial;
+//    [Tooltip("Drag your transparent yellow Oil material asset file here")]
+//    public Material oilMaterial;
+
+//    // Direct fallback vector configurations
+//    private Color colorWater = new Color(0.3f, 0.65f, 0.9f, 0.35f);
+//    private Color colorEthanol = new Color(0.9f, 0.95f, 1.0f, 0.2f);
+//    private Color colorOil = new Color(0.95f, 0.75f, 0.1f, 0.7f);
+//    private Color colorMixedClear = new Color(0.5f, 0.8f, 0.95f, 0.25f);
+
+//    void Start()
+//    {
+//        mainCam = Camera.main;
+//        rb = GetComponent<Rigidbody>();
+//        if (rb != null) rb.isKinematic = true;
+//        transform.rotation = Quaternion.identity;
+
+//        // Automatically isolate materials on launch to prevent pink shader bugs
+//        if (liquidMesh != null)
+//        {
+//            Renderer r = liquidMesh.GetComponent<Renderer>();
+//            if (r != null) r.material = new Material(r.material);
+//        }
+//        if (oilLayerMesh != null)
+//        {
+//            Renderer r = oilLayerMesh.GetComponent<Renderer>();
+//            if (r != null) r.material = new Material(r.material);
+//        }
+//    }
+
+//    void OnMouseDown()
+//    {
+//        if (mainCam == null || Mouse.current == null) return;
+//        planeZ = transform.position.z;
+//        Vector2 mPos = Mouse.current.position.ReadValue();
+//        Ray ray = mainCam.ScreenPointToRay(mPos);
+//        float d = (planeZ - ray.origin.z) / ray.direction.z;
+//        dragOffset = transform.position - ray.GetPoint(d);
+//        isDragging = true;
+//        if (rb != null) rb.isKinematic = true;
+
+//        RaycastHit[] hits = Physics.RaycastAll(transform.position, Vector3.down, 10f);
+//        foreach (RaycastHit hit in hits)
+//        {
+//            if (hit.collider.gameObject != this.gameObject &&
+//                hit.collider.GetComponentInParent<BeakerScripts>() == null)
+//            {
+//                tableY = hit.point.y;
+//                break;
+//            }
+//        }
+//    }
+
+//    void OnMouseUp()
+//    {
+//        isDragging = false;
+//        if (rb != null) { rb.isKinematic = true; rb.useGravity = false; }
+//        transform.position = new Vector3(transform.position.x, tableY, transform.position.z);
+//        currentTilt = 0f; transform.rotation = Quaternion.identity;
+//    }
+
+//    void Update()
+//    {
+//        if (Keyboard.current == null || Mouse.current == null) return;
+
+//        if (isDragging)
+//        {
+//            Vector2 mPos = Mouse.current.position.ReadValue();
+//            Ray ray = mainCam.ScreenPointToRay(mPos);
+//            float rDist = (planeZ - ray.origin.z) / ray.direction.z;
+//            Vector3 targetPos = ray.GetPoint(rDist) + dragOffset;
+//            targetPos.z = planeZ;
+//            if (targetPos.y < tableY) targetPos.y = tableY;
+//            transform.position = targetPos;
+
+//            if (Keyboard.current.aKey.isPressed) currentTilt += tiltSpeed * Time.deltaTime;
+//            if (Keyboard.current.dKey.isPressed) currentTilt -= tiltSpeed * Time.deltaTime;
+
+//            bool canStir = (currentContents == LiquidType.UnstirredWaterOil || currentContents == LiquidType.MixedWaterEthanol);
+//            if (Keyboard.current.sKey.isPressed && canStir)
+//            {
+//                stirProgress = Mathf.Min(stirProgress + Time.deltaTime * 0.5f, 1f);
+//                if (stirProgress >= 1f)
+//                {
+//                    isStirredAndSettled = true;
+//                    if (currentContents == LiquidType.UnstirredWaterOil)
+//                    {
+//                        currentContents = LiquidType.SettledWaterOil;
+//                    }
+//                }
+//            }
+//            transform.rotation = Quaternion.Euler(0f, 0f, currentTilt);
+
+//            bool isTilted = Mathf.Abs(currentTilt) >= 20f;
+//            bool hasFluid = currentFillAmount > 0f;
+//            bool notEmpty = currentContents != LiquidType.Empty;
+
+//            if (isTilted && hasFluid && notEmpty)
+//            {
+//                BeakerScripts[] all = Object.FindObjectsOfType<BeakerScripts>();
+//                BeakerScripts bestTarget = null;
+//                float closestDist = float.MaxValue;
+
+//                foreach (BeakerScripts receiver in all)
+//                {
+//                    if (receiver == this || receiver.currentFillAmount >= 1.0f) continue;
+//                    float spaceDist = Vector3.Distance(transform.position, receiver.transform.position);
+//                    if (spaceDist < closestDist) { closestDist = spaceDist; bestTarget = receiver; }
+//                }
+
+//                if (bestTarget != null && closestDist <= pourDistanceRange)
+//                {
+//                    float amt = transferSpeed * Time.deltaTime;
+//                    currentFillAmount = Mathf.Max(currentFillAmount - amt, 0f);
+//                    bestTarget.currentFillAmount = Mathf.Min(bestTarget.currentFillAmount + amt, 1f);
+
+//                    if (bestTarget.currentContents == LiquidType.Empty)
+//                    {
+//                        bestTarget.currentContents = currentContents;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Water && currentContents == LiquidType.Ethanol)
+//                    {
+//                        bestTarget.currentContents = LiquidType.MixedWaterEthanol;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Ethanol && currentContents == LiquidType.Water)
+//                    {
+//                        bestTarget.currentContents = LiquidType.MixedWaterEthanol;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Water && currentContents == LiquidType.Oil)
+//                    {
+//                        if (!bestTarget.isStirredAndSettled) bestTarget.currentContents = LiquidType.UnstirredWaterOil;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Oil && currentContents == LiquidType.Water)
+//                    {
+//                        if (!bestTarget.isStirredAndSettled) bestTarget.currentContents = LiquidType.UnstirredWaterOil;
+//                    }
+
+//                    if (currentFillAmount <= 0f) currentContents = LiquidType.Empty;
+//                }
+//            }
+//        }
+//        else
+//        {
+//            currentTilt = 0f; transform.rotation = Quaternion.identity;
+//        }
+
+//        UpdateMeshVisuals();
+//    }
+
+//    private void UpdateMeshVisuals()
+//    {
+//        if (liquidMesh == null) return;
+
+//        liquidMesh.localPosition = Vector3.zero;
+//        liquidMesh.localRotation = Quaternion.identity;
+
+//        // AUTO-DETECTION: Finds the Oil Layer Mesh wherever it is attached inside your beaker children
+//        if (oilLayerMesh == null)
+//        {
+//            oilLayerMesh = transform.Find("Oil Layer Mesh");
+//            if (oilLayerMesh == null && liquidMesh != null)
+//            {
+//                oilLayerMesh = liquidMesh.Find("Oil Layer Mesh");
+//            }
+//        }
+
+//        if (oilLayerMesh != null)
+//        {
+//            oilLayerMesh.localRotation = Quaternion.identity;
+//            oilLayerMesh.gameObject.SetActive(false);
+//        }
+
+//        if (currentFillAmount <= 0f || currentContents == LiquidType.Empty)
+//        {
+//            liquidMesh.gameObject.SetActive(false);
+//            return;
+//        }
+
+//        liquidMesh.gameObject.SetActive(true);
+//        Renderer liquidRend = liquidMesh.GetComponent<Renderer>();
+//        if (liquidRend == null) return;
+
+//        liquidMesh.localScale = new Vector3(1f, currentFillAmount * maxLiquidYScale, 1f);
+
+//        // NATIVE SCENEMATERIAL EXTRACTOR
+//        BeakerScripts[] sceneBeakers = Object.FindObjectsOfType<BeakerScripts>();
+//        Material waterAssetMat = null;
+//        Material oilAssetMat = null;
+
+//        foreach (BeakerScripts b in sceneBeakers)
+//        {
+//            if (b.currentContents == LiquidType.Water && b.liquidMesh != null)
+//            {
+//                waterAssetMat = b.liquidMesh.GetComponent<Renderer>().sharedMaterial;
+//            }
+//            if (b.currentContents == LiquidType.Oil && b.liquidMesh != null)
+//            {
+//                oilAssetMat = b.liquidMesh.GetComponent<Renderer>().sharedMaterial;
+//            }
+//        }
+
+//        if (currentContents == LiquidType.Water)
+//        {
+//            if (waterAssetMat != null) liquidRend.sharedMaterial = waterAssetMat;
+//            else liquidRend.material.color = colorWater;
+//        }
+//        else if (currentContents == LiquidType.Ethanol)
+//        {
+//            liquidRend.material.color = colorEthanol;
+//        }
+//        else if (currentContents == LiquidType.Oil)
+//        {
+//            if (oilAssetMat != null) liquidRend.sharedMaterial = oilAssetMat;
+//            else liquidRend.material.color = colorOil;
+//        }
+//        else if (currentContents == LiquidType.MixedWaterEthanol)
+//        {
+//            liquidRend.material.color = Color.Lerp(colorWater, colorMixedClear, stirProgress);
+//        }
+//        else if (currentContents == LiquidType.UnstirredWaterOil ||
+//                 currentContents == LiquidType.SettledWaterOil ||
+//                 isStirredAndSettled)
+//        {
+//            if (waterAssetMat != null) liquidRend.sharedMaterial = waterAssetMat;
+//            else liquidRend.material.color = colorWater;
+
+//            // Scale water layer to exactly 50% height
+//            liquidMesh.localScale = new Vector3(1f, (currentFillAmount * maxLiquidYScale) * 0.5f, 1f);
+
+//            if (oilLayerMesh != null)
+//            {
+//                oilLayerMesh.gameObject.SetActive(true);
+//                Renderer oilRend = oilLayerMesh.GetComponent<Renderer>();
+//                if (oilRend != null)
+//                {
+//                    oilRend.enabled = true;
+//                    if (oilAssetMat != null) oilRend.sharedMaterial = oilAssetMat;
+//                    else oilRend.material.color = colorOil;
+//                }
+
+//                // FIXED LAYERING RULES: Since the oil layer rides inside the water mesh,
+//                // it matches its internal local bounds to stay perfectly glued to the upper surface.
+//                oilLayerMesh.localScale = Vector3.one;
+//                oilLayerMesh.localPosition = new Vector3(0f, 1f, 0f);
+//            }
+//        }
+//    }
+
+//    private Vector3 GetPreciseMouseWorldPos()
+//    {
+//        if (mainCam == null || Mouse.current == null) return Vector3.zero;
+//        Vector2 mousePos = Mouse.current.position.ReadValue();
+//        Ray ray = mainCam.ScreenPointToRay(mousePos);
+//        float rayDistance = (planeZ - ray.origin.z) / ray.direction.z;
+//        return ray.GetPoint(rayDistance);
+//    }
+//}
+
+
+//using UnityEngine;
+//using UnityEngine.InputSystem;
+
+//public class BeakerScripts : MonoBehaviour
+//{
+//    public enum LiquidType
+//    {
+//        Empty, Water, Ethanol, Oil,
+//        MixedWaterEthanol,
+//        UnstirredWaterOil, SettledWaterOil
+//    }
+
+//    private Camera mainCam;
+//    private Rigidbody rb;
+//    private bool isDragging = false;
+//    private Vector3 dragOffset;
+//    private float planeZ;
+//    private float tableY = 1.084f;
+
+//    [Header("Setup Configurations")]
+//    public float tiltSpeed = 120f;
+//    private float currentTilt = 0f;
+//    public Transform liquidMesh;
+//    public float maxLiquidYScale = 0.5f;
+//    public LiquidType currentContents = LiquidType.Empty;
+
+//    [Range(0f, 1f)]
+//    public float currentFillAmount = 0.0f;
+//    public float transferSpeed = 0.5f;
+//    private float stirProgress = 0f;
+//    private bool isStirredAndSettled = false;
+//    public float pourDistanceRange = 3.0f;
+
+//    // Custom transparent color palettes engineered to look beautiful without crashing
+//    private Color colorWater = new Color(0.3f, 0.65f, 0.9f, 0.35f);
+//    private Color colorEthanol = new Color(0.9f, 0.95f, 1.0f, 0.2f);
+//    private Color colorOil = new Color(0.95f, 0.75f, 0.1f, 0.7f);
+//    private Color colorMixedClear = new Color(0.5f, 0.8f, 0.95f, 0.25f);
+//    void Start()
+//    {
+//        mainCam = Camera.main;
+//        rb = GetComponent<Rigidbody>();
+//        if (rb != null) rb.isKinematic = true;
+//        transform.rotation = Quaternion.identity;
+
+//        // Automatically clean and safely isolate materials on launch to prevent pink glitches
+//        if (liquidMesh != null)
+//        {
+//            Renderer r = liquidMesh.GetComponent<Renderer>();
+//            if (r != null) r.material = new Material(r.material);
+//        }
+//    }
+
+//    void OnMouseDown()
+//    {
+//        if (mainCam == null || Mouse.current == null) return;
+//        planeZ = transform.position.z;
+//        Vector2 mPos = Mouse.current.position.ReadValue();
+//        Ray ray = mainCam.ScreenPointToRay(mPos);
+//        float d = (planeZ - ray.origin.z) / ray.direction.z;
+//        dragOffset = transform.position - ray.GetPoint(d);
+//        isDragging = true;
+//        if (rb != null) rb.isKinematic = true;
+
+//        RaycastHit[] hits = Physics.RaycastAll(transform.position, Vector3.down, 10f);
+//        foreach (RaycastHit hit in hits)
+//        {
+//            if (hit.collider.gameObject != this.gameObject &&
+//                hit.collider.GetComponentInParent<BeakerScripts>() == null)
+//            {
+//                tableY = hit.point.y;
+//                break;
+//            }
+//        }
+//    }
+
+//    void OnMouseUp()
+//    {
+//        isDragging = false;
+//        if (rb != null) { rb.isKinematic = true; rb.useGravity = false; }
+//        transform.position = new Vector3(transform.position.x, tableY, transform.position.z);
+//        currentTilt = 0f; transform.rotation = Quaternion.identity;
+//    }
+
+//    void Update()
+//    {
+//        if (Keyboard.current == null || Mouse.current == null) return;
+
+//        if (isDragging)
+//        {
+//            Vector2 mPos = Mouse.current.position.ReadValue();
+//            Ray ray = mainCam.ScreenPointToRay(mPos);
+//            float rDist = (planeZ - ray.origin.z) / ray.direction.z;
+//            Vector3 targetPos = ray.GetPoint(rDist) + dragOffset;
+//            targetPos.z = planeZ;
+//            if (targetPos.y < tableY) targetPos.y = tableY;
+//            transform.position = targetPos;
+
+//            if (Keyboard.current.aKey.isPressed) currentTilt += tiltSpeed * Time.deltaTime;
+//            if (Keyboard.current.dKey.isPressed) currentTilt -= tiltSpeed * Time.deltaTime;
+
+//            bool canStir = (currentContents == LiquidType.UnstirredWaterOil || currentContents == LiquidType.MixedWaterEthanol);
+//            if (Keyboard.current.sKey.isPressed && canStir)
+//            {
+//                stirProgress = Mathf.Min(stirProgress + Time.deltaTime * 0.5f, 1f);
+//                if (stirProgress >= 1f) isStirredAndSettled = true;
+//            }
+//            transform.rotation = Quaternion.Euler(0f, 0f, currentTilt);
+
+//            bool isTilted = Mathf.Abs(currentTilt) >= 20f;
+//            bool hasFluid = currentFillAmount > 0f;
+//            bool notEmpty = currentContents != LiquidType.Empty;
+
+//            if (isTilted && hasFluid && notEmpty)
+//            {
+//                BeakerScripts[] all = Object.FindObjectsOfType<BeakerScripts>();
+//                BeakerScripts bestTarget = null;
+//                float closestDist = float.MaxValue;
+
+//                foreach (BeakerScripts receiver in all)
+//                {
+//                    if (receiver == this || receiver.currentFillAmount >= 1.0f) continue;
+//                    float spaceDist = Vector3.Distance(transform.position, receiver.transform.position);
+//                    if (spaceDist < closestDist) { closestDist = spaceDist; bestTarget = receiver; }
+//                }
+
+//                if (bestTarget != null && closestDist <= pourDistanceRange)
+//                {
+//                    float amt = transferSpeed * Time.deltaTime;
+//                    currentFillAmount = Mathf.Max(currentFillAmount - amt, 0f);
+//                    bestTarget.currentFillAmount = Mathf.Min(bestTarget.currentFillAmount + amt, 1f);
+
+//                    if (bestTarget.currentContents == LiquidType.Empty)
+//                    {
+//                        bestTarget.currentContents = currentContents;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Water && currentContents == LiquidType.Ethanol)
+//                    {
+//                        bestTarget.currentContents = LiquidType.MixedWaterEthanol;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Ethanol && currentContents == LiquidType.Water)
+//                    {
+//                        bestTarget.currentContents = LiquidType.MixedWaterEthanol;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Water && currentContents == LiquidType.Oil)
+//                    {
+//                        if (!bestTarget.isStirredAndSettled) bestTarget.currentContents = LiquidType.UnstirredWaterOil;
+//                    }
+//                    else if (bestTarget.currentContents == LiquidType.Oil && currentContents == LiquidType.Water)
+//                    {
+//                        if (!bestTarget.isStirredAndSettled) bestTarget.currentContents = LiquidType.UnstirredWaterOil;
+//                    }
+
+//                    if (currentFillAmount <= 0f) currentContents = LiquidType.Empty;
+//                }
+//            }
+//        }
+//        else
+//        {
+//            currentTilt = 0f; transform.rotation = Quaternion.identity;
+//        }
+
+//        UpdateMeshVisuals();
+//    }
+//    private void UpdateMeshVisuals()
+//    {
+//        if (liquidMesh == null) return;
+//        liquidMesh.localPosition = Vector3.zero;
+//        liquidMesh.localRotation = Quaternion.identity;
+
+//        if (currentFillAmount <= 0f || currentContents == LiquidType.Empty)
+//        {
+//            liquidMesh.gameObject.SetActive(false);
+//            return;
+//        }
+
+//        liquidMesh.gameObject.SetActive(true);
+//        Renderer r = liquidMesh.GetComponent<Renderer>();
+//        if (r == null) return;
+//        Material mat = r.material;
+
+//        // Scale your single cylinder mesh smoothly inside the glass boundaries
+//        liquidMesh.localScale = new Vector3(1f, currentFillAmount * maxLiquidYScale, 1f);
+
+//        // STABLE NATIVE TINTING ENGINE
+//        if (currentContents == LiquidType.Water)
+//        {
+//            mat.color = colorWater;
+//        }
+//        else if (currentContents == LiquidType.Ethanol)
+//        {
+//            mat.color = colorEthanol;
+//        }
+//        else if (currentContents == LiquidType.Oil)
+//        {
+//            mat.color = colorOil;
+//        }
+//        else if (currentContents == LiquidType.MixedWaterEthanol)
+//        {
+//            mat.color = Color.Lerp(colorWater, colorMixedClear, stirProgress);
+//        }
+
+//        // 2. CRASH-PROOF SINGLE-MESH BLENDER FOR WATER + OIL MIXTURES
+//        else if (currentContents == LiquidType.UnstirredWaterOil ||
+//                 currentContents == LiquidType.SettledWaterOil ||
+//                 isStirredAndSettled)
+//        {
+//            // Combines your transparent blue water base with your beautiful golden oil yellow tint 
+//            // natively inside a single material layer pass, guaranteeing a clean visible blend 
+//            // that never turns pink or remains colorless!
+//            Color mixedImmiscibleTint = Color.Lerp(colorWater, colorOil, 0.7f);
+//            mat.color = mixedImmiscibleTint;
+//        }
+//    }
+
+//    private Vector3 GetPreciseMouseWorldPos()
+//    {
+//        if (mainCam == null || Mouse.current == null) return Vector3.zero;
+//        Vector2 mousePos = Mouse.current.position.ReadValue();
+//        Ray ray = mainCam.ScreenPointToRay(mousePos);
+//        float rayDistance = (planeZ - ray.origin.z) / ray.direction.z;
+//        return ray.GetPoint(rayDistance);
+//    }
+//}
