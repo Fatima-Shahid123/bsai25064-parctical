@@ -1,0 +1,77 @@
+## Strengths and Limitations
+
+### Limitations
+One limitation of this module is that the test tube movement is controlled using keyboard keys (W, A, S, D). While functional, this interaction is less natural compared to direct mouse-based manipulation.
+
+Fortunately, this limitation was addressed by my group member, who developed a similar test tube module using mouse controls. As a result, our project includes two versions of the same simulation, each demonstrating a different interaction method.
+
+### Strengths
+The feature I am most satisfied with is the liquid pouring mechanism. During pouring:
+
+- The liquid level in the filled test tube gradually decreases.
+- The liquid level in the empty test tube gradually increases.
+- The transfer process is visually observable in real time.
+
+This creates a realistic and engaging laboratory simulation experience.
+
+
+## Strengths and Limitations
+
+### Strengths
+The feature I particularly enjoyed implementing was the circular stirring motion of the glass rod.
+
+When the user presses the **O** key:
+- The glass rod moves in a circular path.
+- A realistic stirring effect is created.
+- The stirring radius can easily be adjusted through the Transform settings in Unity.
+
+This flexibility allows the motion to be customized for different experiment requirements and improves the overall realism of the simulation.
+
+### Future Improvements
+Future versions could include automatic collision-based stirring effects and more advanced liquid interaction during the stirring process.
+
+## Strengths and Limitations
+
+### Limitations
+
+One challenge I was unable to fully overcome was the stirring interaction.
+
+Ideally, the stirring process should have been performed directly using the Glass Rod. However, both the beaker interaction and glass rod interaction required similar controls, which created implementation difficulties. As a result, the stirring functionality was assigned to the **S** key instead.
+
+Another challenge that required a significant amount of development time was simulating the separation of oil after stirring.
+
+Although the experiment successfully demonstrates the mixing of water and oil, I wanted to create a more realistic effect where a small oil layer gradually reappears on top after stirring.
+
+### Strengths
+
+The feature I am most proud of is the overall interaction system of the practical.
+
+Key achievements include:
+
+- Automatic beaker positioning when released.
+- Realistic liquid pouring mechanics.
+- Stirring simulation.
+- Dynamic color changes during the experiment.
+- Liquid level adjustments inside containers.
+
+To improve immersion, I also designed a laboratory environment containing:
+
+- Laboratory table
+- Chairs
+- Cupboard
+- Additional laboratory apparatus placed beneath the table
+
+Furthermore, a camera movement system was implemented. Using the Arrow Keys, users can move closer to the experimental setup and observe the practical from different viewpoints.
+
+### Overall Outcome
+
+Despite some limitations, the practical successfully demonstrates:
+- Liquid transfer between containers.
+- Mixing and stirring processes.
+- Laboratory object interaction.
+- A realistic virtual laboratory environment.
+
+The project provided valuable experience in Unity development, object interaction systems, and laboratory simulation design.
+
+
+
